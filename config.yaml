@@ -1,0 +1,39 @@
+# ArUco Marker Configuration
+aruco:
+  # ArUco dictionary type (DICT_4X4_50, DICT_5X5_100, etc.)
+  dict_type: "DICT_4X4_50"
+  # Marker size in meters (for pose estimation)
+  marker_size: 0.05  # 5cm
+
+# ArUco detector parameter overrides (optional).
+# Useful for far/small markers: reduce minMarkerPerimeterRate and tune adaptive threshold windows.
+aruco_params:
+  # Accept smaller marker perimeter (for far markers). Typical default ~0.03.
+  minMarkerPerimeterRate: 0.02
+  # Adaptive threshold window sizes.
+  adaptiveThreshWinSizeMin: 3
+  adaptiveThreshWinSizeMax: 23
+  adaptiveThreshWinSizeStep: 10
+  # Corner refinement method: NONE / SUBPIX / CONTOUR / APRILTAG
+  cornerRefinementMethod: "NONE"
+
+# World coordinates for each ArUco marker
+# Format: marker_id: [x, y]
+# Units: millimeters (mm)
+world_coordinates:
+  1: [0.0, 0.0]
+  2: [100.0, 0.0]
+  3: [100.0, 100.0]
+  4: [0.0, 100.0]
+
+# Vehicle marker ID (ArUco marker_id attached on the car)
+vehicle_id: 0
+
+# Minimum number of markers required for calibration
+min_marker_count: 4
+
+# UI configuration (optional)
+ui:
+  # Trajectory display time window in milliseconds
+  trace_window_ms: 500
+

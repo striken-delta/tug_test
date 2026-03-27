@@ -1,0 +1,22 @@
+# ArUco Marker Configuration
+aruco:
+  # ArUco dictionary type (DICT_4X4_50, DICT_5X5_100, etc.)
+  dict_type: "DICT_4X4_50"
+  # Marker size in meters (for pose estimation)
+  marker_size: 0.05  # 5cm
+
+# World coordinates for each ArUco marker
+# Format: marker_id: [x, y]
+# Units: millimeters (mm)
+world_coordinates:
+  1: [0.0, 0.0]
+  2: [-100.0, -0.0]
+  2: [150.0, 0.0]
+  3: [225.0, -225.0]
+
+vehicle_id: 0
+car_id: 0
+
+
+# Minimum number of markers required for calibration
+min_marker_count: 4
