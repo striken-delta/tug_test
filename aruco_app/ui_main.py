@@ -14,6 +14,8 @@ from PyQt5.QtGui import QImage, QPixmap, QMouseEvent
 from aruco_core import ArUcoDetector, CoordinateTransformer, get_config
 from aruco_core.run_logger import RunLogger, make_run_ts
 from aruco_core.video_recorder import VideoRecorder
+from aruco_core.daheng_camera import DahengCamera, HAS_GXIPY
+from aruco_core.udp_sender import UDPSender
 
 
 class ImageLabel(QLabel):
@@ -126,6 +128,13 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self.update_frame)
         self.is_detecting = False
 
+        # Camera type: "opencv" or "daheng"
+        self.camera_type = getattr(self.cfg, "CAMERA_TYPE", "opencv")
+        self.opencv_device_index = int(getattr(self.cfg, "OPENCV_DEVICE_INDEX", 0))
+        self.daheng_device_index = int(getattr(self.cfg, "DAHENG_DEVICE_INDEX", 1))
+        self.exposure_time_us = float(getattr(self.cfg, "EXPOSURE_TIME_US", -1))
+        self.gain_db = float(getattr(self.cfg, "GAIN_DB", -1))
+
         # Session-level logging timestamp (created once per app run)
         self.script_start_ts = make_run_ts()
         repo_root = Path(__file__).resolve().parents[1]
@@ -156,6 +165,25 @@ class MainWindow(QMainWindow):
         self.last_vehicle_center_px = None  # (cx, cy)
         self.last_vehicle_center_world = None  # (wx, wy) mm
         self.last_vehicle_yaw_deg = None  # float deg
+
+        # UDP sender
+        self.udp_sender = None
+        self._udp_timer = QTimer()
+        self._udp_timer.timeout.connect(self._on_udp_timer_tick)
+        self._udp_send_hz = float(getattr(self.cfg, "UDP_SEND_HZ", 20))
+        # 缓存最新定位数据，供独立 UDP 定时器使用
+        self._udp_last_x_mm = None
+        self._udp_last_y_mm = None
+        self._udp_last_yaw_deg = None
+        if getattr(self.cfg, "UDP_ENABLED", False):
+            self.udp_sender = UDPSender(
+                target1_ip=getattr(self.cfg, "UDP_TARGET1_IP", "127.0.0.1"),
+                target1_port=int(getattr(self.cfg, "UDP_TARGET1_PORT", 9005)),
+                target2_ip=getattr(self.cfg, "UDP_TARGET2_IP", None),
+                target2_port=int(getattr(self.cfg, "UDP_TARGET2_PORT", 9010)),
+            )
+            if not self.udp_sender.open():
+                self.udp_sender = None
 
         # Setup UI
         self.setup_ui()
@@ -371,7 +399,12 @@ class MainWindow(QMainWindow):
         )
 
         if file_path:
-            image = cv2.imread(file_path)
+            # cv2.imread 不支持中文路径，用 fromfile + imdecode 替代
+            try:
+                buf = np.fromfile(file_path, dtype=np.uint8)
+                image = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+            except Exception:
+                image = None
             if image is not None:
                 self.current_image = image
                 self.image_label.set_image(image)
@@ -383,11 +416,24 @@ class MainWindow(QMainWindow):
 
     def start_camera(self):
         """Start camera capture"""
-        self.cap = cv2.VideoCapture(0)
-        if not self.cap.isOpened():
-            QMessageBox.warning(self, "Error", "Failed to open camera")
-            self.radio_image.setChecked(True)
-            return
+        if self.camera_type == "daheng" and HAS_GXIPY:
+            self.cap = DahengCamera(
+                device_index=self.daheng_device_index,
+                exposure_time_us=self.exposure_time_us,
+                gain_db=self.gain_db,
+            )
+            if not self.cap.open():
+                QMessageBox.warning(self, "Error", "Failed to open Daheng camera")
+                self.radio_image.setChecked(True)
+                self.cap = None
+                return
+        else:
+            # 使用 DirectShow 后端 (cv2.CAP_DSHOW)，避免 MSMF 后端对 USB 免驱相机兼容性问题
+            self.cap = cv2.VideoCapture(self.opencv_device_index, cv2.CAP_DSHOW)
+            if not self.cap.isOpened():
+                QMessageBox.warning(self, "Error", "Failed to open camera")
+                self.radio_image.setChecked(True)
+                return
 
         # Determine FPS for recording/video pacing.
         fps = self.cap.get(cv2.CAP_PROP_FPS)
@@ -401,9 +447,14 @@ class MainWindow(QMainWindow):
 
         self._update_trace_max_len()
 
+        cam_label = "Daheng" if (self.camera_type == "daheng" and HAS_GXIPY) else "OpenCV"
         interval_ms = max(1, int(round(1000.0 / self.source_fps)))
         self.timer.start(interval_ms)
-        self.status_label.setText(f"Status: Camera started (FPS={self.source_fps:.1f})")
+
+        # 启动独立 UDP 发送定时器（固定频率，不受相机帧率影响）
+        self._start_udp_timer()
+
+        self.status_label.setText(f"Status: Camera started [{cam_label}] (FPS={self.source_fps:.1f})")
 
     def stop_camera(self):
         """Stop current capture (camera/video)."""
@@ -420,6 +471,35 @@ class MainWindow(QMainWindow):
             self.status_label.setText("Status: Camera stopped")
         else:
             self.status_label.setText("Status: Stopped")
+
+    def _start_udp_timer(self):
+        """启动独立 UDP 发送定时器（固定频率，不受相机帧率影响）"""
+        if self.udp_sender is None:
+            return
+        hz = max(1.0, self._udp_send_hz)
+        interval_ms = max(1, int(round(1000.0 / hz)))
+        self._udp_timer.start(interval_ms)
+
+    def _stop_udp_timer(self):
+        """停止 UDP 发送定时器"""
+        self._udp_timer.stop()
+
+    def _on_udp_timer_tick(self):
+        """以固定频率发送最新缓存的定位数据"""
+        if self.udp_sender is None:
+            return
+        if self._udp_last_x_mm is None or self._udp_last_y_mm is None or self._udp_last_yaw_deg is None:
+            # 每 40 次（约 2 秒）打印一次缺失提示，避免刷屏
+            self._udp_skip_cnt = getattr(self, '_udp_skip_cnt', 0) + 1
+            if self._udp_skip_cnt % 40 == 1:
+                print("[UDPSender] 无有效定位数据，跳过发送 (请确认标定成功且车辆 marker 可见)")
+            return
+        self._udp_skip_cnt = 0
+        self.udp_sender.send(
+            self._udp_last_x_mm,
+            self._udp_last_y_mm,
+            self._udp_last_yaw_deg,
+        )
 
     def start_video(self, file_path: str):
         """Start playing an mp4 (or other supported) file for detection."""
@@ -510,6 +590,9 @@ class MainWindow(QMainWindow):
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
 
+        # 启动独立 UDP 发送定时器（所有模式：camera / image / video）
+        self._start_udp_timer()
+
         if self.radio_image.isChecked():
             if self.current_image is not None:
                 self.detect_and_calibrate(self.current_image)
@@ -539,6 +622,12 @@ class MainWindow(QMainWindow):
         self.is_detecting = False
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
+
+        # 停止 UDP 发送并清空缓存
+        self._stop_udp_timer()
+        self._udp_last_x_mm = None
+        self._udp_last_y_mm = None
+        self._udp_last_yaw_deg = None
 
         if self.radio_image.isChecked() and self.current_image is not None:
             # For static image mode, remove any overlay by showing raw image again.
@@ -645,8 +734,20 @@ class MainWindow(QMainWindow):
                             yaw_deg = math.degrees(math.atan2(dy, dx))
                             self.last_vehicle_center_world = center_world
                             self.last_vehicle_yaw_deg = self._norm_angle_deg(yaw_deg)
+                            # 缓存最新定位数据，由独立 UDP 定时器以固定频率发送
+                            if self._udp_last_x_mm is None:
+                                print(f"[UDPSender] 首次获取定位数据: x={center_world[0]:.1f}mm y={center_world[1]:.1f}mm yaw={self.last_vehicle_yaw_deg:.1f}deg")
+                            self._udp_last_x_mm = float(center_world[0])
+                            self._udp_last_y_mm = float(center_world[1])
+                            self._udp_last_yaw_deg = float(self.last_vehicle_yaw_deg)
                 except Exception:
                     vehicle_detected = False
+
+        # 车辆未识别时清空缓存，避免持续发送过期数据
+        if not vehicle_detected:
+            self._udp_last_x_mm = None
+            self._udp_last_y_mm = None
+            self._udp_last_yaw_deg = None
 
         self._update_vehicle_panel(vehicle_detected)
 

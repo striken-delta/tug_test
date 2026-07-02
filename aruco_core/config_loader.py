@@ -49,9 +49,26 @@ class Config:
         ui_config = config_data.get("ui", {}) or {}
         self.TRACE_WINDOW_MS = int(ui_config.get("trace_window_ms", 500))
 
+        # Camera settings
+        camera_config = config_data.get("camera", {}) or {}
+        self.CAMERA_TYPE = str(camera_config.get("type", "opencv")).lower()
+        self.OPENCV_DEVICE_INDEX = int(camera_config.get("opencv_device_index", 0))
+        self.DAHENG_DEVICE_INDEX = int(camera_config.get("daheng_device_index", 1))
+        self.EXPOSURE_TIME_US = float(camera_config.get("exposure_time_us", -1))
+        self.GAIN_DB = float(camera_config.get("gain_db", -1))
+
         # Vehicle marker ID (ArUco marker_id on the car)
         # Prefer `vehicle_id`; keep `car_id` for backward compatibility.
         self.VEHICLE_ID = int(config_data.get("vehicle_id", config_data.get("car_id", 0)))
+
+        # UDP settings
+        udp_config = config_data.get("udp", {}) or {}
+        self.UDP_ENABLED = bool(udp_config.get("enabled", False))
+        self.UDP_SEND_HZ = float(udp_config.get("send_hz", 20))
+        self.UDP_TARGET1_IP = str(udp_config.get("target1_ip", "127.0.0.1"))
+        self.UDP_TARGET1_PORT = int(udp_config.get("target1_port", 9005))
+        self.UDP_TARGET2_IP = str(udp_config.get("target2_ip", "")) or None
+        self.UDP_TARGET2_PORT = int(udp_config.get("target2_port", 9010))
 
     @staticmethod
     def _resolve_config_path(config_file: str) -> Path:

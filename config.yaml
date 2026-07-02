@@ -3,7 +3,7 @@ aruco:
   # ArUco dictionary type (DICT_4X4_50, DICT_5X5_100, etc.)
   dict_type: "DICT_4X4_50"
   # Marker size in meters (for pose estimation)
-  marker_size: 0.05  # 5cm
+  marker_size: 0.2  # 100mm
 
 # ArUco detector parameter overrides (optional).
 # Useful for far/small markers: reduce minMarkerPerimeterRate and tune adaptive threshold windows.
@@ -22,9 +22,9 @@ aruco_params:
 # Units: millimeters (mm)
 world_coordinates:
   1: [0.0, 0.0]
-  2: [100.0, 0.0]
-  3: [100.0, 100.0]
-  4: [0.0, 100.0]
+  2: [5000.0, 0.0]
+  3: [5000.0, 5000.0]
+  4: [0.0, 5000.0]
 
 # Vehicle marker ID (ArUco marker_id attached on the car)
 vehicle_id: 0
@@ -32,8 +32,36 @@ vehicle_id: 0
 # Minimum number of markers required for calibration
 min_marker_count: 4
 
+# UDP 发送配置
+udp:
+  # 是否启用 UDP 发送
+  enabled: true
+  # 发送频率 (Hz)，独立于相机帧率
+  send_hz: 20
+  # 目标1: 定位板卡地址
+  #target1_ip: "10.182.77.168"
+  target1_ip: "10.168.1.246"
+  target1_port: 9005
+  # 目标2: Unity 地址 (设为空则不发送)
+  target2_ip: "192.168.1.104"
+  target2_port: 9010
+
 # UI configuration (optional)
 ui:
   # Trajectory display time window in milliseconds
   trace_window_ms: 500
+
+# Camera configuration
+camera:
+  # Camera type: "opencv" (普通USB摄像头) or "daheng" (大恒工业相机)
+  #type: "daheng"
+  type: "opencv"
+  # USB免驱相机设备索引 (仅 type=opencv 时生效, 0=第一个摄像头)
+  opencv_device_index: 1
+  # 大恒相机设备索引 (从1开始，仅 type=daheng 时生效)
+  daheng_device_index: 1
+  # 曝光时间 (微秒 us), 范围视相机型号, 设为 -1 表示自动曝光
+  exposure_time_us: 10000
+  # 增益 (dB), 范围视相机型号, 设为 -1 表示自动增益
+  gain_db: 16
 
